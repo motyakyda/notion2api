@@ -337,10 +337,7 @@ class ConversationManager:
                     "searchScopes": [{"type": "everything"}],
                 },
             }
-        return {
-            "id": str(uuid.uuid4()),
-            "type": "config",
-            "value": {
+        cfg: dict[str, Any] = {
                 "type": thread_type,
                 "model": model_name,
                 "modelFromUser": True,
@@ -365,7 +362,7 @@ class ConversationManager:
                 "enableSystemPromptAsPage": False,
                 "enableUserSessionContext": False,
                 "enableCreateAndRunThread": True,
-                "enableAgentGenerateImage": False,
+                "enableAgentGenerateImage": True,
                 "enableSpeculativeSearch": False,
                 "enableUpdatePageV2Tool": True,
                 "enableUpdatePageAutofixer": True,
@@ -380,13 +377,13 @@ class ConversationManager:
                 "customConnectorNames": [],
                 "searchScopes": [{"type": "everything"}],
                 "useSearchToolV2": False,
-                "useRulePrioritization": False,
+                "useRulePrioritization": True,
                 "enableExperimentalIntegrations": False,
                 "enableAgentViewNotificationsTool": False,
-                "enableScriptAgent": False,
+                "enableScriptAgent": True,
                 "enableScriptAgentAdvanced": False,
-                "enableScriptAgentSlack": False,
-                "enableScriptAgentMcpServers": False,
+                "enableScriptAgentSlack": True,
+                "enableScriptAgentMcpServers": True,
                 "enableScriptAgentMail": False,
                 "enableScriptAgentCalendar": False,
                 "enableScriptAgentCustomAgentTools": False,
@@ -395,7 +392,15 @@ class ConversationManager:
                 "enableQueryCalendar": False,
                 "enableQueryMail": False,
                 "enableMailExplicitToolCalls": True,
-            },
+            }
+        # выравниваем под реальный UI: для kimi/gpt-6 ставить reasoningEffort max
+        if "kimi-k3" in model_name or "kimi-2.7" in model_name or "gpt-6" in model_name:
+            cfg["reasoningEffort"] = "max"
+            cfg["reasoning_effort"] = "max"
+        return {
+            "id": str(uuid.uuid4()),
+            "type": "config",
+            "value": cfg,
         }
 
     def _build_context_block(self, notion_client: Any, *, gemini_mode: bool = False) -> Dict[str, Any]:
@@ -1993,16 +1998,23 @@ def build_lite_transcript(user_prompt: str, model_name: str) -> list[dict[str, A
 
     notion_model = get_notion_model(model_name)
     thread_type = get_thread_type(model_name)
+    # 与 app.notion 前端保持一致：kimi/gpt-6 需要 reasoningEffort
+    config_value: dict[str, Any] = {
+        "type": thread_type,
+        "model": notion_model,
+        "modelFromUser": True,
+    }
+    # 前端 для kimi-k3 ставит reasoningEffort max (см. дамп saveTransactionsFanout)
+    if model_name in ("kimi-k3", "kimi-2.7", "gpt-6-astra"):
+        config_value["reasoningEffort"] = "max"
+    elif model_name.startswith("gpt-"):
+        config_value["reasoningEffort"] = "medium"
 
     return [
         {
             "id": str(uuid.uuid4()),
             "type": "config",
-            "value": {
-                "type": thread_type,
-                "model": notion_model,
-                "modelFromUser": True,
-            }
+            "value": config_value
         },
         {
             "id": str(uuid.uuid4()),
@@ -2036,17 +2048,38 @@ def build_standard_transcript(
     notion_model = get_notion_model(model_name)
     thread_type = get_thread_type(model_name)
 
-    # 基础 transcript：config + context
+    # 基础 transcript：config + context — выравниваем под реальный Notion UI (см. curl dump)
+    config_value = {
+        "type": thread_type,
+        "model": notion_model,
+        "modelFromUser": True,
+        "useWebSearch": True,
+        "enableAgentAutomations": True,
+        "enableAgentIntegrations": True,
+        "enableCustomAgents": True,
+        "enableScriptAgent": True,
+        "enableAgentDiffs": True,
+        "enableAgentCardCustomization": True,
+        "enableSystemPromptAsPage": False,
+        "enableUserSessionContext": False,
+        "enableAgentGenerateImage": True,
+        "enableWebResearch": True,
+        "useRulePrioritization": True,
+        "searchScopes": [{"type": "everything"}],
+        "isCustomAgent": False,
+        "isOnboardingAgent": False,
+        "isMobile": False,
+    }
+    if model_name in ("kimi-k3", "kimi-2.7", "gpt-6-astra"):
+        config_value["reasoningEffort"] = "max"
+        config_value["reasoning_effort"] = "max"
+    elif model_name.startswith("gpt-"):
+        config_value["reasoningEffort"] = "medium"
     transcript = [
         {
             "id": str(uuid.uuid4()),
             "type": "config",
-            "value": {
-                "type": thread_type,
-                "model": notion_model,
-                "modelFromUser": True,
-                "useWebSearch": True,
-            }
+            "value": config_value
         },
         {
             "id": str(uuid.uuid4()),
