@@ -13,7 +13,7 @@ MODEL_MAP: dict[str, str] = {
     "claude-opus5": "agave-flan",
     "kimi-2.7": "fireworks-kimi-k2.7",
     "kimi-k3": "fireworks-kimi-k3",
-    "gpt-6-astra": "opal-astra-medium",
+    "gpt-6-astra": "orlando-quinn",
     "deepseek-v4pro": "baseten-deepseek-v4-pro",
     "glm-5.2": "baseten-glm-5.2",
     "grok-4.3": "xigua-mochi-medium",
