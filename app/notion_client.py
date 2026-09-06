@@ -60,8 +60,14 @@ class NotionOpusAPI:
         self.delete_url = f"{NOTION_URL}/api/v3/saveTransactions"
         self.account_key = self.user_email or self.user_id or "unknown-account"
 
-        # 复用 cloudscraper 实例：保留 Cloudflare challenge cookie，避免每次请求都重新过验证
-        self._scraper = cloudscraper.create_scraper()
+        # 使用 requests 替代 cloudscraper — cloudscraper 在当前 Notion CF 配置下
+        # возвращает 502 / temporarily-unavailable, обычный requests работает стабильно
+        self._scraper = requests.Session()
+        # 保留 cloudscraper как fallback, если CF challenge понадобится
+        try:
+            self._cf_scraper = cloudscraper.create_scraper()
+        except Exception:
+            self._cf_scraper = None
         self._scraper_lock = threading.Lock()
 
     def _build_cookie_header(self) -> str:
@@ -337,22 +343,39 @@ class NotionOpusAPI:
                 timeout=(15, 120),
             )
             if response.status_code == 403:
-                # Cloudflare challenge 可能过期，重建 scraper 后重试一次
                 response.close()
-                logger.warning(
-                    "Got 403, rebuilding cloudscraper to refresh Cloudflare challenge",
-                    extra={"request_info": {"event": "cloudflare_challenge_refresh", "account": self.account_key}},
-                )
-                new_scraper = cloudscraper.create_scraper()
-                with self._scraper_lock:
-                    self._scraper = new_scraper
-                response = new_scraper.post(
-                    self.url,
-                    headers=headers,
-                    json=payload,
-                    stream=True,
-                    timeout=(15, 120),
-                )
+                # 403 — пробуем cloudscraper fallback, если он есть
+                if self._cf_scraper is not None:
+                    logger.warning(
+                        "Got 403, trying cloudscraper fallback",
+                        extra={"request_info": {"event": "cloudflare_challenge_refresh", "account": self.account_key}},
+                    )
+                    try:
+                        fallback = cloudscraper.create_scraper()
+                        response = fallback.post(
+                            self.url,
+                            headers=headers,
+                            json=payload,
+                            stream=True,
+                            timeout=(15, 120),
+                        )
+                        if response.status_code == 200:
+                            with self._scraper_lock:
+                                self._cf_scraper = fallback
+                    except Exception:
+                        pass
+                # если всё ещё 403 — пересоздаём обычный session
+                if response.status_code == 403:
+                    new_scraper = requests.Session()
+                    with self._scraper_lock:
+                        self._scraper = new_scraper
+                    response = new_scraper.post(
+                        self.url,
+                        headers=headers,
+                        json=payload,
+                        stream=True,
+                        timeout=(15, 120),
+                    )
             if response.status_code != 200:
                 excerpt = (response.text or "").strip().replace("\n", " ")[:300]
                 # 429 和 5xx 都允许重试（换账号或等待后重试）

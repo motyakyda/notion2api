@@ -40,6 +40,7 @@ window.NotionAI.Core.Constants = {
                 { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", icon: "⚙", badge: "New" },
                 { id: "gpt-5.4", label: "GPT-5.4", icon: "⚙" },
                 { id: "gpt-5.5", label: "GPT-5.5", icon: "⚙", badge: "Beta" },
+                { id: "gpt-6-astra", label: "GPT-6 Astra", icon: "⚙", badge: "New" },
             ]
         },
         {
@@ -54,6 +55,7 @@ window.NotionAI.Core.Constants = {
             label: 'Moonshot',
             models: [
                 { id: "kimi-2.7", label: "Kimi K2.7 Code", icon: "🌙", badge: "New" },
+                { id: "kimi-k3", label: "Kimi K3", icon: "🌙", badge: "New" },
             ]
         },
         {
@@ -102,6 +104,8 @@ window.NotionAI.Core.Constants = {
         { id: "gemini-3.1pro", label: "Gemini 3.1 Pro" },
         { id: "gemini-3flash", label: "Gemini 3 Flash" },
         { id: "kimi-2.7", label: "Kimi K2.7 Code" },
+        { id: "kimi-k3", label: "Kimi K3" },
+        { id: "gpt-6-astra", label: "GPT-6 Astra" },
         { id: "grok-4.3", label: "Grok 4.3" },
         { id: "spacexai-4.5", label: "SpaceXAI 4.5" },
         { id: "grok-build0.1", label: "Grok Build 0.1" },
@@ -129,6 +133,8 @@ window.NotionAI.Core.Constants = {
         "gemini-3.1pro": "Gemini 3.1 Pro",
         "gemini-3flash": "Gemini 3 Flash",
         "kimi-2.7": "Kimi K2.7 Code",
+        "kimi-k3": "Kimi K3",
+        "gpt-6-astra": "GPT-6 Astra",
         "grok-4.3": "Grok 4.3",
         "spacexai-4.5": "SpaceXAI 4.5",
         "grok-build0.1": "Grok Build 0.1",
@@ -154,6 +160,8 @@ window.NotionAI.Core.Constants = {
         "gemini-3.1pro": "✦",
         "gemini-3flash": "✦",
         "kimi-2.7": "🌙",
+        "kimi-k3": "🌙",
+        "gpt-6-astra": "⚙",
         "grok-4.3": "⚡",
         "spacexai-4.5": "⚡",
         "grok-build0.1": "⚡",
