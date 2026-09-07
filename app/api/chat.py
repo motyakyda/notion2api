@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import time
 import uuid
@@ -1321,6 +1322,168 @@ async def _handle_standard_request(
     )
 
 
+def _wants_agent_loop(request: Request, req_body: ChatCompletionRequest) -> bool:
+    """Агентный tool-цикл: явный заголовок, tools в запросе или флаг в .env."""
+    from app.agent_loop import agent_loop_available
+
+    if not agent_loop_available():
+        return False
+    header = (request.headers.get("X-Agent-Loop") or "").strip().lower()
+    if header in ("1", "on", "true", "yes"):
+        return True
+    if header in ("0", "off", "false", "no"):
+        return False
+    env_flag = os.getenv("AGENT_LOOP", "").strip().lower()
+    if env_flag in ("1", "on", "true", "yes", "always"):
+        return True
+    if env_flag in ("0", "off", "false", "no"):
+        return False
+    # По умолчанию: цикл включается, когда клиент прислал tools (opencode и др.)
+    return bool(getattr(req_body, "tools", None))
+
+
+async def _handle_agent_loop_request(
+    request: Request,
+    req_body: ChatCompletionRequest,
+    response: Response,
+) -> JSONResponse | StreamingResponse:
+    """Server-side tool-цикл (как bridge в notioncode_mcp):Notion AI вызывает
+    локальные tools через JSON-действия, прокси исполняет их и возвращается
+    клиенту только финальный ответ."""
+    import os as _os
+    import subprocess
+
+    from app.agent_loop import run_agent_loop
+
+    pool = request.app.state.account_pool
+
+    if not is_supported_model(req_body.model):
+        available_models = list_available_models()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported model '{req_body.model}'. Available models: {', '.join(available_models)}",
+        )
+
+    # Собираем system + задачу (аналог _prepare_messages, но без истории-памяти).
+    system_parts: list[str] = []
+    dialogue: list[tuple[str, str]] = []
+    for msg in req_body.messages:
+        if msg.role == "system":
+            if msg.content.strip():
+                system_parts.append(msg.content.strip())
+        else:
+            dialogue.append((msg.role, msg.content))
+    if not dialogue:
+        raise HTTPException(status_code=400, detail="messages must contain at least one non-system message.")
+    # Всё диалоговое прошлое склеиваем в задачу (клиент сам ведёт историю).
+    task_parts = []
+    for role, content in dialogue:
+        if role == "user":
+            task_parts.append(content)
+        else:
+            task_parts.append(f"[Previous assistant reply]\n{content}")
+    user_task = "\n\n---\n\n".join(p for p in task_parts if p.strip())
+    if not user_task.strip():
+        raise HTTPException(status_code=400, detail="Task text is empty.")
+
+    # cwd клиента: opencode присылает в system, иначе берём процессный cwd.
+    cwd = os.getcwd()
+    m = re.search(r"working directory[^\n`]*?([/~][\w./-]+)", (system_parts[0] if system_parts else ""), re.IGNORECASE)
+    if m:
+        cwd = m.group(1).rstrip(".,;:")
+
+    response_id = f"chatcmpl-{uuid.uuid4().hex}"
+    max_retries = max(2, len(pool.clients))
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        client = None
+        try:
+            client = pool.get_client()
+            final_text = await asyncio.to_thread(
+                run_agent_loop,
+                client,
+                req_body.model,
+                "\n\n".join(system_parts) or None,
+                user_task,
+                cwd,
+            )
+            if not final_text.strip():
+                raise NotionUpstreamError("Agent loop produced empty final answer.", retriable=True)
+
+            if req_body.stream:
+                def _gen() -> Generator[str, None, None]:
+                    chunk_size = 400
+                    text = final_text
+                    started = False
+                    for i in range(0, len(text), chunk_size):
+                        piece = text[i : i + chunk_size]
+                        if not started:
+                            started = True
+                            yield _build_stream_chunk(response_id, req_body.model, role="assistant", content=piece)
+                        else:
+                            yield _build_stream_chunk(response_id, req_body.model, content=piece)
+                    yield _build_stream_chunk(response_id, req_body.model, finish_reason="stop")
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(
+                    _gen(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+            return JSONResponse(
+                {
+                    "id": response_id,
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": req_body.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": final_text},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                }
+            )
+        except (NotionUpstreamError, RuntimeError) as exc:
+            last_exc = exc
+            if client is not None and isinstance(exc, NotionUpstreamError) and exc.retriable:
+                pool.mark_failed(client)
+            logger.warning(
+                "Agent loop attempt failed",
+                extra={
+                    "request_info": {
+                        "event": "agent_loop_attempt_failed",
+                        "attempt": attempt,
+                        "error": str(exc),
+                    }
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if client is not None:
+                pool.mark_failed(client)
+            logger.error("Agent loop unhandled error", exc_info=True)
+        # небольшая пауза перед следующей попыткой
+        await asyncio.sleep(2)
+
+    detail = str(last_exc) if last_exc else "unknown error"
+    return _build_error_response(
+        503,
+        code="AGENT_LOOP_FAILED",
+        message=f"Agent loop failed: {detail}",
+        error_type="agent_loop_error",
+        suggestion="Check /tmp/notion2api.err.log and retry.",
+    )
+
+
 @router.post("/chat/completions", tags=["chat"])
 async def create_chat_completion(
     request: Request,
@@ -1337,6 +1500,10 @@ async def create_chat_completion(
     - Heavy 模式：20/分钟（包含会话管理）
     """
     from app.config import is_standard_mode
+
+    # Агентный tool-цикл (server-side, как bridge в notioncode_mcp)
+    if _wants_agent_loop(request, req_body) and not is_lite_mode():
+        return await _handle_agent_loop_request(request, req_body, response)
 
     # Lite 模式：单轮问答，无记忆
     if is_lite_mode():

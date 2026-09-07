@@ -22,6 +22,9 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = Field(default=False, description="Whether to stream the response as SSE.")
     temperature: Optional[float] = Field(default=None, description="Sampling temperature.")
     conversation_id: Optional[str] = Field(default=None, description="Extension for stateful conversation tracking.")
+    # OpenAI tools (принимаются и служат триггером агентного tool-цикла)
+    tools: Optional[List[Dict[str, Any]]] = Field(default=None, description="OpenAI tools array (triggers agent tool loop).")
+    tool_choice: Optional[Any] = Field(default=None, description="OpenAI tool_choice parameter.")
 
 # ================================
 # 非流式返回 Schema
